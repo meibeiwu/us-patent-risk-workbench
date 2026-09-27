@@ -92,7 +92,7 @@ export function parseGoogleJson(payload, kind = 'utility', limit = 30) {
 
 function cors(origin, allowed) {
   const requested = origin || '';
-  const allow = requested === allowed || requested.startsWith('http://localhost:') ? requested : allowed;
+  const allow = requested === allowed || requested.startsWith('http://localhost:') || requested.startsWith('http://127.0.0.1:') ? requested : allowed;
   return {
     'Access-Control-Allow-Origin': allow,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -178,8 +178,9 @@ function publicationParts(value) {
 async function patentImage(request, env) {
   const url = new URL(request.url);
   const parts = publicationParts(url.searchParams.get('publication'));
+  const drawingRequest = url.searchParams.has('page');
   const page = Math.min(6, Math.max(1, Number(url.searchParams.get('page') || 1)));
-  const cacheKey = new Request(`${url.origin}/cache/image/${parts.epodoc}/${page}`);
+  const cacheKey = new Request(`${url.origin}/cache/image-v6/${parts.epodoc}/${drawingRequest ? `drawing-${page}` : 'thumbnail'}`);
   const cache = caches.default;
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
@@ -203,13 +204,17 @@ async function patentImage(request, env) {
   if (!xml) throw new Error(`EPO image inquiry failed (${inquiryStatus})`);
   const drawingBlock = xml.match(/<(?:ops:)?document-instance\b[^>]*\bdesc=["']Drawing["'][\s\S]*?<\/(?:ops:)?document-instance>/i)?.[0] || '';
   const link = drawingBlock.match(/\blink=["']([^"']+)["']/i)?.[1] || xml.match(/<(?:ops:)?document-instance\b[^>]*\blink=["']([^"']+\/thumbnail)["']/i)?.[1];
+  const pageCount = Number(drawingBlock.match(/\bnumber-of-pages=["'](\d+)["']/i)?.[1] || 1);
   const sourceSystem = drawingBlock.match(/\bsystem=["']([^"']+)["']/i)?.[1] || '';
   if (!link) throw new Error('No patent drawing is available');
   let imageResponse;
   const cleanLink = link.replace(/^\/+/, '');
   const imagePath = cleanLink.startsWith('published-data/images/') ? `/rest-services/${cleanLink}` : `/rest-services/published-data/images/${cleanLink}`;
+  const fullImagePath = imagePath.replace(/\/(?:thumbnail|firstpage)$/i, '/fullimage');
   const firstPagePath = imagePath.replace(/\/thumbnail$/i, '/firstpage');
-  const variants = [{ path: imagePath, accept: 'image/png' }, { path: firstPagePath, accept: 'image/jpeg' }];
+  const variants = drawingRequest
+    ? [{ path: `${fullImagePath}.tiff`, accept: 'application/tiff' }]
+    : [{ path: imagePath, accept: 'image/png' }, { path: firstPagePath, accept: 'image/jpeg' }];
   for (const root of [EPO_ROOT, EPO_REST_ROOT]) {
     for (const variant of variants) {
       const query = new URLSearchParams({ Range: String(page) });
@@ -217,14 +222,17 @@ async function patentImage(request, env) {
       imageResponse = await fetch(`${root}${variant.path}?${query}`, {
         headers: { Authorization: `Bearer ${token}`, Accept: variant.accept, 'X-OPS-Range': String(page) }
       });
-      if (imageResponse.ok && (imageResponse.headers.get('content-type') || '').startsWith('image/')) break;
+      const returnedType = imageResponse.headers.get('content-type') || '';
+      if (imageResponse.ok && (returnedType.startsWith('image/') || returnedType.includes('tiff'))) break;
     }
-    if (imageResponse?.ok && (imageResponse.headers.get('content-type') || '').startsWith('image/')) break;
+    const returnedType = imageResponse?.headers.get('content-type') || '';
+    if (imageResponse?.ok && (returnedType.startsWith('image/') || returnedType.includes('tiff'))) break;
   }
   if (!imageResponse?.ok) throw new Error(`EPO image retrieval failed (${imageResponse?.status || 502})`);
-  const contentType = imageResponse.headers.get('content-type') || 'image/png';
+  const rawContentType = imageResponse.headers.get('content-type') || '';
+  const contentType = rawContentType.includes('tiff') ? 'image/tiff' : (rawContentType || 'image/png');
   if (!contentType.startsWith('image/')) throw new Error('EPO did not return an image');
-  const result = new Response(imageResponse.body, { headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=604800' } });
+  const result = new Response(imageResponse.body, { headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=604800', 'X-Patent-Image-Pages': String(pageCount), 'X-Patent-Image-Source': cleanLink.slice(0, 160) } });
   await cache.put(cacheKey, result.clone());
   return result;
 }
