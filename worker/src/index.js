@@ -1,4 +1,5 @@
 const EPO_ROOT = 'https://ops.epo.org/3.2';
+const EPO_REST_ROOT = 'https://ops.epo.org';
 const GOOGLE_PATENTS_ROOT = 'https://patents.google.com';
 let tokenCache = { value: '', expiresAt: 0 };
 
@@ -162,7 +163,67 @@ async function searchOps(request, env) {
   const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/xml', Range: `1-${range}` } });
   if (!response.ok) throw new Error(`EPO search failed (${response.status}: ${response.headers.get('x-rejection-reason') || 'unknown'})`);
   const parsed = parseOpsXml(await response.text(), kind);
+  parsed.results = parsed.results.map(item => ({ ...item, thumbnail: `${url.origin}/image?publication=${encodeURIComponent(item.publication)}` }));
   const result = Response.json({ ok: true, provider: 'EPO OPS', query, kind, total: parsed.total, results: parsed.results }, { headers: { 'Cache-Control': 'public, max-age=1800' } });
+  await cache.put(cacheKey, result.clone());
+  return result;
+}
+
+function publicationParts(value) {
+  const match = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').match(/^(US|WO)(D?\d+)(A\d?|B\d?|S\d?)$/);
+  if (!match) throw new Error('Invalid US/WO publication number');
+  return { country: match[1], number: match[2], kind: match[3], epodoc: `${match[1]}${match[2]}.${match[3]}` };
+}
+
+async function patentImage(request, env) {
+  const url = new URL(request.url);
+  const parts = publicationParts(url.searchParams.get('publication'));
+  const cacheKey = new Request(`${url.origin}/cache/image/${parts.epodoc}`);
+  const cache = caches.default;
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+  const token = await getToken(env);
+  const referenceCandidates = [...new Set([
+    parts.epodoc,
+    parts.kind === 'S' ? `${parts.country}${parts.number}.S1` : '',
+    `${parts.country}${parts.number}`
+  ].filter(Boolean))];
+  let xml = '';
+  let inquiryStatus = 404;
+  for (const reference of referenceCandidates) {
+    for (const root of [EPO_REST_ROOT, EPO_ROOT]) {
+      const inquiryUrl = `${root}/rest-services/published-data/publication/epodoc/${encodeURIComponent(reference)}/images`;
+      const inquiry = await fetch(inquiryUrl, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/ops+xml' } });
+      inquiryStatus = inquiry.status;
+      if (inquiry.ok) { xml = await inquiry.text(); break; }
+    }
+    if (xml) break;
+  }
+  if (!xml) throw new Error(`EPO image inquiry failed (${inquiryStatus})`);
+  const drawingBlock = xml.match(/<(?:ops:)?document-instance\b[^>]*\bdesc=["']Drawing["'][\s\S]*?<\/(?:ops:)?document-instance>/i)?.[0] || '';
+  const link = drawingBlock.match(/\blink=["']([^"']+)["']/i)?.[1] || xml.match(/<(?:ops:)?document-instance\b[^>]*\blink=["']([^"']+\/thumbnail)["']/i)?.[1];
+  const sourceSystem = drawingBlock.match(/\bsystem=["']([^"']+)["']/i)?.[1] || '';
+  if (!link) throw new Error('No patent drawing is available');
+  let imageResponse;
+  const cleanLink = link.replace(/^\/+/, '');
+  const imagePath = cleanLink.startsWith('published-data/images/') ? `/rest-services/${cleanLink}` : `/rest-services/published-data/images/${cleanLink}`;
+  const firstPagePath = imagePath.replace(/\/thumbnail$/i, '/firstpage');
+  const variants = [{ path: imagePath, accept: 'image/png' }, { path: firstPagePath, accept: 'image/jpeg' }];
+  for (const root of [EPO_ROOT, EPO_REST_ROOT]) {
+    for (const variant of variants) {
+      const query = new URLSearchParams({ Range: '1' });
+      if (sourceSystem) query.set('From', sourceSystem);
+      imageResponse = await fetch(`${root}${variant.path}?${query}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: variant.accept, 'X-OPS-Range': '1' }
+      });
+      if (imageResponse.ok && (imageResponse.headers.get('content-type') || '').startsWith('image/')) break;
+    }
+    if (imageResponse?.ok && (imageResponse.headers.get('content-type') || '').startsWith('image/')) break;
+  }
+  if (!imageResponse?.ok) throw new Error(`EPO image retrieval failed (${imageResponse?.status || 502})`);
+  const contentType = imageResponse.headers.get('content-type') || 'image/png';
+  if (!contentType.startsWith('image/')) throw new Error('EPO did not return an image');
+  const result = new Response(imageResponse.body, { headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=604800' } });
   await cache.put(cacheKey, result.clone());
   return result;
 }
@@ -205,6 +266,11 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === '/health') return Response.json({ ok: true, provider: 'Google Patents', searchReady: true, epoConfigured: Boolean(env.EPO_CLIENT_ID && env.EPO_CLIENT_SECRET) }, { headers });
+      if (url.pathname === '/image' && request.method === 'GET') {
+        const response = await patentImage(request, env);
+        const merged = new Headers(response.headers);Object.entries(headers).forEach(([k,v])=>merged.set(k,v));
+        return new Response(response.body, { status: response.status, headers: merged });
+      }
       if (url.pathname !== '/search' || request.method !== 'GET') return Response.json({ ok: false, error: 'Not found' }, { status: 404, headers });
       const response = await search(request, env);
       const merged = new Headers(response.headers);Object.entries(headers).forEach(([k,v])=>merged.set(k,v));
