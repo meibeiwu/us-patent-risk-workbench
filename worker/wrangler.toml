@@ -1,0 +1,10 @@
+name = "amazon-patent-search"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://meibeiwu.github.io"
+
+# Deploy 后执行以下两条命令，密钥不会写入代码或 GitHub：
+# npx wrangler secret put EPO_CLIENT_ID
+# npx wrangler secret put EPO_CLIENT_SECRET
