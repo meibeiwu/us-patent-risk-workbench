@@ -154,7 +154,7 @@ async function searchOps(request, env) {
   const url = new URL(request.url);
   const { kind, query } = buildCql(url.searchParams);
   const range = Math.min(50, Math.max(5, Number(url.searchParams.get('limit') || 24)));
-  const cacheKey = new Request(`${url.origin}/cache/${kind}/${encodeURIComponent(query)}/${range}`);
+  const cacheKey = new Request(`${url.origin}/cache/v2/${kind}/${encodeURIComponent(query)}/${range}`);
   const cache = caches.default;
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
