@@ -268,9 +268,13 @@ export default {
       const url = new URL(request.url);
       if (url.pathname === '/health') return Response.json({ ok: true, provider: 'Google Patents', searchReady: true, epoConfigured: Boolean(env.EPO_CLIENT_ID && env.EPO_CLIENT_SECRET) }, { headers });
       if (url.pathname === '/image' && request.method === 'GET') {
-        const response = await patentImage(request, env);
-        const merged = new Headers(response.headers);Object.entries(headers).forEach(([k,v])=>merged.set(k,v));
-        return new Response(response.body, { status: response.status, headers: merged });
+        try {
+          const response = await patentImage(request, env);
+          const merged = new Headers(response.headers);Object.entries(headers).forEach(([k,v])=>merged.set(k,v));
+          return new Response(response.body, { status: response.status, headers: merged });
+        } catch {
+          return new Response(null, { status: 204, headers: { ...headers, 'Cache-Control': 'public, max-age=3600', 'X-Image-Unavailable': 'true' } });
+        }
       }
       if (url.pathname !== '/search' || request.method !== 'GET') return Response.json({ ok: false, error: 'Not found' }, { status: 404, headers });
       const response = await search(request, env);

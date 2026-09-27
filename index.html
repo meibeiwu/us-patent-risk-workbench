@@ -183,7 +183,7 @@ function apiKeywords(){const words=state.project.keywords.split(',').map(x=>x.tr
 function keywordMatch(title){const low=(title||'').toLowerCase(),words=apiKeywords(),hits=words.filter(x=>low.includes(x.toLowerCase())).length;return Math.min(99,Math.round(28+(hits/Math.max(1,Math.min(words.length,4)))*62))}
 function resultStatus(s){return s==='active'?'Google 提示可能有效':s==='not_active'?'Google 提示可能非有效':'状态待官方核实'}
 function wipoSearchUrl(number){return /^WO/i.test(number||'')?'https://patentscope.wipo.int/search/en/advancedSearch.jsf?query='+encodeURIComponent('WO:'+String(number).replace(/^WO/i,'').replace(/[^0-9]/g,'')):''}
-function patentVisual(p){const src=safeUrl(p.thumbnail||'');return src?`<img src="${esc(src)}" alt="${esc(p.publication||p.number||'专利附图')}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:patentIcon(p)}
+function patentVisual(p){const src=safeUrl(p.thumbnail||'');return src?`<img src="${esc(src)}" alt="${esc(p.publication||p.number||'专利附图')}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span style="display:none">${patentIcon(p)}</span>`:patentIcon(p)}
 function visualLabel(score){return score>=72?'高相似线索':score>=52?'中相似线索':'低相似线索'}
 function visualBadge(score){return score>=72?'high':score>=52?'mid':'low'}
 function renderVisualMetrics(v){return v?`<div class="visualmetrics"><div class="visualmetric">轮廓 <b>${v.details.shape}%</b></div><div class="visualmetric">局部结构 <b>${v.details.structure}%</b></div><div class="visualmetric">比例 <b>${v.details.proportion}%</b></div></div><div class="hint">最佳匹配：产品图 ${v.productImageIndex+1} × 专利附图 ${v.patentPage}；算法置信度 ${v.confidence}。</div>`:''}
