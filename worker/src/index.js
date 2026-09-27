@@ -178,7 +178,8 @@ function publicationParts(value) {
 async function patentImage(request, env) {
   const url = new URL(request.url);
   const parts = publicationParts(url.searchParams.get('publication'));
-  const cacheKey = new Request(`${url.origin}/cache/image/${parts.epodoc}`);
+  const page = Math.min(6, Math.max(1, Number(url.searchParams.get('page') || 1)));
+  const cacheKey = new Request(`${url.origin}/cache/image/${parts.epodoc}/${page}`);
   const cache = caches.default;
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
@@ -211,10 +212,10 @@ async function patentImage(request, env) {
   const variants = [{ path: imagePath, accept: 'image/png' }, { path: firstPagePath, accept: 'image/jpeg' }];
   for (const root of [EPO_ROOT, EPO_REST_ROOT]) {
     for (const variant of variants) {
-      const query = new URLSearchParams({ Range: '1' });
+      const query = new URLSearchParams({ Range: String(page) });
       if (sourceSystem) query.set('From', sourceSystem);
       imageResponse = await fetch(`${root}${variant.path}?${query}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: variant.accept, 'X-OPS-Range': '1' }
+        headers: { Authorization: `Bearer ${token}`, Accept: variant.accept, 'X-OPS-Range': String(page) }
       });
       if (imageResponse.ok && (imageResponse.headers.get('content-type') || '').startsWith('image/')) break;
     }
